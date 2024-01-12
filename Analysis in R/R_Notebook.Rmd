@@ -1,0 +1,567 @@
+---
+title: "Analysis R notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(stringr)
+library(ggplot2)
+library(dplyr)
+library(GGally)
+library(reshape2)
+library(fastDummies)
+library(caret)
+library(Matrix)
+library(glmnet)
+library(car)
+library(rpart)
+```
+
+CODE 1
+```{r}
+# Load the dataset 
+data <- read.csv("./Employee Turnover.csv")
+# print 5 sample rows
+sample_n(data, 5)
+```
+
+Code 2
+```{r}
+# print data structure
+str(data)
+```
+Code 3
+```{r}
+# Check if all EmployeeNumber values are unique
+cat('EmployeeNumber values are unique:', (length(unique(data$EmployeeNumber)) == nrow(data)))
+data <- subset(data, select = -EmployeeNumber)
+```
+Code 4
+```{r}
+# Calculate the number of missing values per column
+missing_values <- sapply(data, function(x) sum(is.na(x)))
+# Filter columns with missing values greater than 0
+missing_values <- missing_values[missing_values > 0]
+# Check if there are any missing values and print the result
+if (length(missing_values) == 0) {
+  print("There are no explicit missing values")
+} else {
+  print(missing_values)
+}
+```
+Code 5
+```{r}
+# Identify character columns
+char_columns <- sapply(data, is.character)
+char_columns_names <- names(data)[char_columns]
+# Print value counts for each character column that has an empty string ""
+for (col_name in char_columns_names) {
+  if ("" %in% data[[col_name]]) {
+    cat(paste("Value counts for ", col_name, ":", sep = ""))
+    print(table(data[[col_name]]))
+    cat("\n")
+  }
+}
+# Create logical vectors for empty string checks
+empty_turnover_type <- data$TurnoverType == ""
+empty_turnover_reason <- data$TurnoverReason == ""
+# Check if every time one is empty, the other is also empty
+if (all(empty_turnover_type == empty_turnover_reason)) {
+  print("Empty strings in TurnoverType and TurnoverReason match on the same rows every time.")
+  # Replace empty strings with "StillEmployed" in TurnoverType
+  data$TurnoverType <- ifelse(data$TurnoverType == "", "StillEmployed", data$TurnoverType)
+  # Replace empty strings with "StillEmployed" in TurnoverReason
+  data$TurnoverReason <- ifelse(data$TurnoverReason == "", "StillEmployed", data$TurnoverReason)
+} else {
+  print("Empty strings in TurnoverType and TurnoverReason do not match on the same rows every time.")
+}
+```
+
+
+Code 6
+```{r}
+# Define the lists of columns
+numerical_cols <- c("Age", "MonthlyIncome", "PercentSalaryHike","DistanceFromHome",
+                    "TotalWorkingYears", "YearsAtCompany", "YearsInCurrentRole", 
+                    "YearsSinceLastPromotion", "YearsWithCurrManager",
+                    "TrainingTimesLastYear", "NumCompaniesWorked" 
+                    )
+ordinal_cols <- c( "Education", "StockOptionLevel", "BusinessTravel",
+                   "JobLevel", "PerformanceRating", "JobInvolvement","JobSatisfaction", 
+                  "RelationshipSatisfaction",   "EnvironmentSatisfaction", "WorkLifeBalance")
+nominal_cols <- c("Gender", "MaritalStatus", "EducationField", "Department", "JobRole", 
+                  "OverTime", "Location", "Status", "TurnoverType", "TurnoverReason")
+categorical_cols <- c("Gender", "MaritalStatus", "Education", "EducationField", "StockOptionLevel", 
+                      "BusinessTravel","Department", "JobRole", "OverTime",
+                      "JobLevel", "PerformanceRating", "JobInvolvement","JobSatisfaction", 
+                      "RelationshipSatisfaction",   "EnvironmentSatisfaction", "WorkLifeBalance",
+                      "Location", "Status", "TurnoverType", "TurnoverReason")
+
+# Transform ordinal variables into ordered factors
+data$BusinessTravel <- factor(data$BusinessTravel, levels = c("Non-Travel", "Travel_Rarely", "Travel_Frequently"), ordered = TRUE)
+data$Education <- factor(data$Education, levels = 1:5,ordered = TRUE)
+data$EnvironmentSatisfaction <- factor(data$EnvironmentSatisfaction, levels = 1:4, ordered = TRUE)
+data$JobInvolvement <- factor(data$JobInvolvement,levels = 1:4, ordered = TRUE)
+data$JobLevel <- factor(data$JobLevel, levels = 1:5, ordered = TRUE)
+data$JobSatisfaction <- factor(data$JobSatisfaction, levels = 1:4, ordered = TRUE)
+data$PerformanceRating <- factor(data$PerformanceRating, levels = 1:4, ordered = TRUE)
+data$RelationshipSatisfaction <- factor(data$RelationshipSatisfaction,  levels = 1:4,  ordered = TRUE)
+data$StockOptionLevel <- factor(data$StockOptionLevel, levels = 0:3, ordered = TRUE)
+data$WorkLifeBalance <- factor(data$WorkLifeBalance, levels = 1:4, ordered = TRUE)
+
+# Transform nominal variables into non-ordered factors
+data$Department <- factor(data$Department)
+data$EducationField <- factor(data$EducationField)
+data$Gender <- factor(data$Gender)
+data$JobRole <- factor(data$JobRole)
+data$MaritalStatus <- factor(data$MaritalStatus)
+data$OverTime <- factor(data$OverTime)
+data$Location <- factor(data$Location)
+data$Status <- factor(data$Status)
+data$TurnoverType <- factor(data$TurnoverType)
+data$TurnoverReason <- factor(data$TurnoverReason)
+
+# New order of columns
+new_column_order <- c("Age", "Gender", "MaritalStatus", 
+                      "EducationField", "Education", 
+                      "Location", "DistanceFromHome", 
+                      "MonthlyIncome", "PercentSalaryHike", "StockOptionLevel", 
+                      "Department", "JobRole", "JobLevel", 
+                      "WorkLifeBalance", "BusinessTravel", "OverTime", "PerformanceRating", "TrainingTimesLastYear", "JobInvolvement", 
+                      "TotalWorkingYears", "YearsAtCompany", "YearsInCurrentRole", "YearsSinceLastPromotion", "YearsWithCurrManager", "NumCompaniesWorked", 
+                      "RelationshipSatisfaction", "EnvironmentSatisfaction", "JobSatisfaction", 
+                      "Status", "TurnoverType", "TurnoverReason")
+
+# Reorder the columns in the dataframe
+data <- data[, new_column_order]
+```
+
+Code 7
+```{r}
+# Summary statistics for numerical variables
+print('Numerical Values')
+numerical_summary <- summary(data[, numerical_cols])
+print(numerical_summary)
+
+# Summary statistics for ordinal variables
+print('Ordinal Values')
+ordinal_data <- data[, ordinal_cols]
+ordinal_summary <- sapply(ordinal_data, function(x) summary(as.numeric(as.factor(x))))
+print(ordinal_summary)
+
+# Summarize nominal variables
+print('Nominal Values')
+nominal_summary <- summary(data[, nominal_cols])
+print(nominal_summary)
+```
+
+Code 8
+```{r}
+# Combined histograms with KDE and boxplots for numerical variables
+for (col in numerical_cols) {
+  # Set up the plotting area to have 1 row and 2 columns
+  par(mfrow=c(1, 2))
+
+  # First plot: Histogram with KDE
+  if (col == "TrainingTimesLastYear") {
+    hist(data[[col]], main="Histogram", xlab="", breaks=6, freq=FALSE)
+    dens <- density(data[[col]], bw = 3 * bw.nrd0(data[[col]]), na.rm = TRUE)
+  } else if (col == "YearsAtCompany") {
+    hist(data[[col]], main="Histogram", xlab="", breaks=40, freq=FALSE)
+    dens <- density(data[[col]], bw = 3 * bw.nrd0(data[[col]]), na.rm = TRUE)
+  } else if (col == "YearsInCUrrentRole") {
+    hist(data[[col]], main="Histogram", xlab="", breaks=18, freq=FALSE)
+    dens <- density(data[[col]], bw = 3 * bw.nrd0(data[[col]]), na.rm = TRUE)
+  }  else if (col == "DistanceFromHome") {
+    hist(data[[col]], main="Histogram", xlab="", breaks=15, freq=FALSE)
+    dens <- density(data[[col]], bw = 3 * bw.nrd0(data[[col]]), na.rm = TRUE)
+  } else if (col == "TotalWorkingYears") {
+    hist(data[[col]], main="Histogram", xlab="", breaks=40, freq=FALSE)
+    dens <- density(data[[col]], bw = 3 * bw.nrd0(data[[col]]), na.rm = TRUE)
+   } else {
+    hist(data[[col]], main="Histogram", xlab="", freq=FALSE)
+    dens <- density(data[[col]], na.rm = TRUE) 
+  }
+  lines(dens, col="blue")
+
+  # Second plot: Boxplot
+  boxplot(data[[col]], main="Boxplot", las=2)
+  
+  # Add a general title for the set of plots with the column name
+  title(paste("Distribution of", col), outer=TRUE, line=-1, cex.main=1.5)
+}
+
+# Bar plots for categorical variables
+for (col in categorical_cols) {
+  barplot(table(data[[col]]), main=paste("Bar Plot of", col), las=2)
+}
+```
+
+Code 9
+
+```{r}
+# Convert Ordinal Variables to Numeric and Combine with Numerical Variables
+numeric_and_ordinal <- cbind(data[, numerical_cols], sapply(data[, ordinal_cols], as.numeric))
+# Calculate the correlation matrix
+correlation_matrix <- cor(numeric_and_ordinal, use = "complete.obs")
+# Melt the correlation matrix into a long format
+cor_melted <- melt(correlation_matrix)
+# Filter out the lower triangle and diagonal
+cor_melted <- cor_melted[upper.tri(correlation_matrix, diag = FALSE), ]
+
+# Create a heatmap with values
+ggplot(cor_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", value)), size = 1.5) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1), space = "Lab", name = "Pearson\nCorrelation") +
+  theme_minimal() +
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.5),
+        axis.text.y = element_text(hjust = 1)) +
+  scale_x_discrete(position = "top")
+```
+Code 10
+
+```{r, fig.width=15, fig.height=10}
+# Create OHE dataset
+ohe_data <- data[, numerical_cols]
+ohe_data <- cbind(ohe_data, sapply(data[, ordinal_cols], as.numeric))
+ohe_data <- cbind(ohe_data, data[, nominal_cols])
+ohe_data <- dummy_cols(ohe_data, remove_first_dummy = FALSE, remove_selected_columns = TRUE)
+
+# Calculate the correlation matrix
+correlation_matrix <- cor(ohe_data)
+# Melt the correlation matrix into a long format
+cor_melted <- melt(correlation_matrix)
+# Filter out the lower triangle and diagonal
+cor_melted <- cor_melted[upper.tri(correlation_matrix, diag = FALSE), ]
+# ggplot code for the heatmap
+ggplot(cor_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", value)), size = 1.5) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1), space = "Lab", name = "Pearson\nCorrelation") +
+  theme_minimal() +
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.5), # Set properties for x-axis text here
+        axis.text.y = element_text(hjust = 1)) +
+  scale_x_discrete(position = "top")
+```
+
+
+Code 11
+```{r}
+# Create a grouped bar plot
+ggplot(data, aes(x = StockOptionLevel, fill = MaritalStatus)) +
+  geom_bar(position = position_dodge()) +
+  labs(title = "Relationship between StockOptionLevel and MaritalStatus",
+       x = "StockOptionLevel",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Code 12
+```{r}
+# Create a grouped bar plot
+ggplot(data, aes(x = JobRole, fill = Department)) +
+  geom_bar(position = position_dodge()) +
+  labs(title = "Relationship between JobRole, and Department",
+       x = "JobRole",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0))
+```
+
+Code 13
+```{r}
+# Rename Departments
+data <- data %>%
+  mutate(Department = factor(case_when(
+    Department == "Human Resources" ~ "HR",
+    Department == "Research & Development" ~ "R&D",
+    TRUE ~ as.character(Department)  # Keeps all other values as they are
+  )))
+# Merge department and job role
+data$JobRole <- paste(data$Department, "-", data$JobRole)
+# Drop Department
+data <- subset(data, select = -Department)
+```
+
+
+Code 14
+```{r, fig.width=15, fig.height=10}
+# Create a grouped bar plot
+ggplot(data, aes(x = JobRole, fill = EducationField)) +
+  geom_bar(position = position_dodge()) +
+  labs(title = "Relationship between JobRole, and EducationField",
+       x = "JobRole",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0))
+```
+
+Code 15
+```{r, fig.width=15, fig.height=10}
+# Create a grouped bar plot
+ggplot(data, aes(x = JobLevel, fill = JobLevel)) +
+  geom_bar(position = position_dodge()) +
+  facet_wrap(~ JobRole) +
+  labs(title = "Relationship between JobRole, and JobLevel",
+       x = "JobLevel",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0))
+```
+
+Code 16
+```{r, fig.width=15, fig.height=10}
+# Create a grouped bar plot
+ggplot(data, aes(x = YearsAtCompany, fill = JobLevel)) +
+  geom_bar(position = position_dodge()) +
+ # facet_wrap(~ JobRole) +
+  labs(title = "Relationship between JobRole, YearsAtCompany and JobLevel",
+       x = "YearsAtCompany",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0))
+```
+
+Code 17
+```{r, fig.width=15, fig.height=10}
+# Create a grouped bar plot
+ggplot(data, aes(x = YearsAtCompany, fill = JobLevel)) +
+  geom_bar(position = position_dodge()) +
+  facet_wrap(~ JobRole) +
+  labs(title = "Relationship between JobRole, YearsAtCompany and JobLevel",
+       x = "YearsAtCompany",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0))
+```
+
+Code 18
+```{r}
+# Create a grouped bar plot
+ggplot(data, aes(x = TurnoverReason, fill = TurnoverType)) +
+  geom_bar(position = position_dodge()) +
+  facet_wrap(~ Status) +
+  labs(title = "Relationship between TurnoverReason, TurnoverType, and Status",
+       x = "Turnover Reason",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Code 19
+```{r}
+# Drop Turnover and Status
+data <- subset(data, select = -c(TurnoverType, Status))
+# Remove unused column from nominal columns and ohe dataset
+nominal_cols <- setdiff(nominal_cols, c("Department", "TurnoverType", "Status"))
+ohe_data <- data[, numerical_cols]
+ohe_data <- cbind(ohe_data, sapply(data[, ordinal_cols], as.numeric))
+ohe_data <- cbind(ohe_data, data[nominal_cols])
+ohe_data <- dummy_cols(ohe_data, remove_first_dummy = FALSE, remove_selected_columns = TRUE)
+```
+
+Code 20
+```{r, fig.width=15, fig.height=4}
+# Calculate the correlation matrix
+cor_matrix <- cor(ohe_data)
+# Selecting the last 4 rows and dropping the last 4 columns
+selected_rows = tail(cor_matrix, 4)
+result = selected_rows[, -((ncol(selected_rows)-3):ncol(selected_rows))]
+# Melting the data into a long format suitable for ggplot
+layoff_correlations = melt(result)
+# Plotting the heatmap
+ggplot(layoff_correlations, aes(Var2, Var1, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", value)), size = 1.5) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1), space = "Lab", name = "Pearson\nCorrelation") +
+  theme_minimal() +
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.5), # Properties for x-axis text
+        axis.text.y = element_text(hjust = 1)) +
+  scale_x_discrete(position = "top")
+```
+
+Code 21
+```{r}
+# Iterating over each row
+for (i in 1:nrow(result)) {
+    # Extract the current row
+    current_row = result[i, ]
+    row_name = rownames(result)[i]
+    # Finding correlations over 0.15
+    correlations_over_015 = current_row[current_row > 0.15]
+    if (length(correlations_over_015) > 0) {
+        cat(row_name, "positive correlations over 0.15:\n")
+        print(correlations_over_015)
+    }
+    cat("\n") 
+    # Finding correlations under -0.15
+    correlations_under_015 = current_row[current_row < -0.15]
+    if (length(correlations_under_015) > 0) {
+        cat(row_name, "negative correlations under -0.15:\n")
+        print(correlations_under_015)
+    }
+    cat("\n\n") 
+}
+```
+
+Code 22
+```{r}
+# Calculating the median age
+median_age <- median(data$Age, na.rm = TRUE)
+# Creating the new column 'NewEmployeeGroup'
+data$NewEmployeeGroup <- with(data, 
+                              Age <= median_age &
+                              YearsInCurrentRole <= 10 &
+                              JobLevel <= 2 &
+                              OverTime == "Yes" &
+                              MaritalStatus == "Single")
+
+# Creating a new dataset with only 'TurnoverReason' and 'NewEmployeeGroup'
+group_df <- data[, c("TurnoverReason", "NewEmployeeGroup")]
+data <- subset(data, select = -NewEmployeeGroup)
+group_df <- subset(group_df, TurnoverReason %in% c("Resignation", "StillEmployed"))
+group_df$TurnoverReason <- ifelse(group_df$TurnoverReason == "Resignation", TRUE, FALSE)
+# Renaming the column
+names(group_df)[names(group_df) == "TurnoverReason"] <- "Resignation"
+
+# Converting the table to a dataframe for plotting
+cont_table <- table(Resignation = group_df$Resignation, NewEmployeeGroup = group_df$NewEmployeeGroup)
+cont_table_with_margins <- addmargins(cont_table)
+print(cont_table_with_margins)
+
+# Performing the Chi-Squared test
+chi_squared_test <- chisq.test(cont_table)
+
+# Printing the results
+print(chi_squared_test)
+```
+
+Code 23
+```{r}
+# Filter the dataset
+logReg_data <- subset(data, TurnoverReason %in% c("Resignation", "StillEmployed"))
+# Rebuild the factor with just the remaining levels
+logReg_data$TurnoverReason <- factor(logReg_data$TurnoverReason)
+# Map 'TurnoverReason' to bolean and rename the column
+logReg_data$TurnoverReason <- ifelse(logReg_data$TurnoverReason == "Resignation", TRUE, FALSE)
+names(logReg_data)[names(logReg_data) == "TurnoverReason"] <- "Resignation"
+
+# Perform logistic regression
+model <- glm(Resignation ~ ., data = logReg_data, family = "binomial")
+# Print the summary of the model
+cat("Logistic Regression for\n")
+print(summary(model))
+```
+
+
+Code 24
+```{r}
+# Select columns
+lr_data <- subset(data, select = -TurnoverReason)
+
+# Build the linear regression model
+model <- lm(MonthlyIncome ~., 
+            data = lr_data)
+# Print the model summary
+print(summary(model))
+
+# Generate predictions
+predictions <- predict(model, lr_data)
+# Create a plot
+ggplot(lr_data, aes(x = MonthlyIncome, y = predictions)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1) +  
+  coord_fixed(ratio = 1, xlim = c(0, 22000), ylim = c(0, 22000)) +  
+  xlab("Actual Monthly Income") + 
+  ylab("Predicted Monthly Income") +  
+  ggtitle("Actual vs Predicted Monthly Income")  
+```
+
+Code 25
+```{r}
+# Build the linear regression model
+model <- lm(MonthlyIncome ~ + JobLevel + JobRole + TotalWorkingYears, data = lr_data)
+# Print the model summary
+print(summary(model))
+
+# Generate predictions
+predictions <- predict(model, lr_data)
+# Create a plot
+ggplot(lr_data, aes(x = MonthlyIncome, y = predictions, color = JobRole)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1) +  
+  coord_fixed(ratio = 1, xlim = c(0, 22000), ylim = c(0, 22000)) +  
+  xlab("Actual Monthly Income") +   
+  ylab("Predicted Monthly Income") +   
+  ggtitle("Actual vs Predicted Monthly Income")   
+# Create a plot
+ggplot(lr_data, aes(x = MonthlyIncome, y = predictions, color = JobLevel)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1) +   
+  coord_fixed(ratio = 1, xlim = c(0, 22000), ylim = c(0, 22000)) +   
+  xlab("Actual Monthly Income") +   
+  ylab("Predicted Monthly Income") +  
+  ggtitle("Actual vs Predicted Monthly Income")  
+```
+
+
+
+
+
+Code 26
+```{r}
+# Perform ANOVA
+aov <- aov(PercentSalaryHike ~ JobRole, data=data)
+# print the summary
+summary(aov)
+# Create a new dataframe with observed and predicted values
+plot_data <- data.frame(Observed = data$PercentSalaryHike, Predicted = aov$fitted.values, JobRole = data$JobRole)
+# Create the scatterplot
+ggplot(plot_data, aes(x = Observed, y = Predicted, color = JobRole)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1) +   
+  coord_fixed(ratio = 1) +   
+  coord_fixed(ratio = 1, xlim = c(10, 27), ylim = c(10, 27)) +   
+  xlab("Observed PercentSalaryHike") +   
+  ylab("Predicted PercentSalaryHike") +   
+  ggtitle("Observed vs Predicted PercentSalaryHike by PerformanceRating") +   
+  scale_color_discrete(name = "PerformanceRating")   
+```
+
+Code 27
+```{r}
+# Perform Shapiro-Wilk normality test
+shapiro_test <- shapiro.test(data$PercentSalaryHike)
+print(shapiro_test)
+# Perform Welch Two Sample t-test
+t_test <- t.test(PercentSalaryHike ~ OverTime, data=data)
+print(t_test)
+```
+
+Code 28
+```{r}
+# Perform Linear regression
+reg <- lm(PercentSalaryHike ~ PerformanceRating, data=data)
+summary(reg)
+
+# Create a new dataframe with observed and predicted values
+plot_data <- data.frame(Observed = data$PercentSalaryHike, Predicted = reg$fitted.values, PerformanceRating = data$PerformanceRating)
+# Create the scatterplot
+ggplot(plot_data, aes(x = Observed, y = Predicted, color = PerformanceRating)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1) +   
+  coord_fixed(ratio = 1) +   
+  coord_fixed(ratio = 1, xlim = c(10, 27), ylim = c(10, 27)) +   
+  xlab("Observed PercentSalaryHike") +   
+  ylab("Predicted PercentSalaryHike") +   
+  ggtitle("Observed vs Predicted PercentSalaryHike by PerformanceRating") +  
+  scale_color_discrete(name = "PerformanceRating")  
+```
